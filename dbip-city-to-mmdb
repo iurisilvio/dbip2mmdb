@@ -1,0 +1,57 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+
+use MaxMind::DB::Writer::Tree;
+use Net::Works::Network;
+use Text::CSV_XS;
+
+# IP-city database
+# ip_start,ip_end,country,stateprov,city
+
+my $num_args = $#ARGV + 1;
+if ($num_args != 2) {
+    print "\nUsage: dbip-city-to-mmdb <csv_input> <mmdb_output>\n";
+    exit;
+}
+
+my $csv = Text::CSV_XS->new({ binary => 1 });
+my $csv_input = $ARGV[0];
+my $mmdb_output = $ARGV[1];
+
+my %types = (
+    country => 'utf8_string',
+    stateprov => 'utf8_string',
+    city => 'utf8_string',
+);
+
+my $tree = MaxMind::DB::Writer::Tree->new(
+    ip_version            => 4,
+    record_size           => 24,
+    database_type         => 'IP-city',
+    languages             => ['en'],
+    description           => { en => 'db-ip.com IP-city database' },
+    map_key_type_callback => sub { $types{ $_[0] } },
+);
+
+open(my $data, '<:encoding(utf8)', $csv_input) or die "Could not open '$csv_input' $!\n";
+
+while (my $row = $csv->getline ($data)) {
+    next unless grep $_, @$row;  # skip empty lines
+    my @subnets = Net::Works::Network->range_as_subnets( $row->[0], $row->[1] );
+    foreach (@subnets) {
+        my $subnet = $_;
+        next if $subnet->version == 6;  # skip IPv6
+        $tree->insert_network(
+            $subnet,
+            {
+                country => $row->[2],
+                stateprov => $row->[3],
+                city => $row->[4],
+            },
+        );
+    }
+}
+open my $fh, '>:bytes', $mmdb_output;
+$tree->write_tree($fh);
+
